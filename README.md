@@ -2,9 +2,6 @@
 
 This is the code for the paper FAITH: Few-Shot Graph Classification with Hierarchical Task Graphs
 
-The citation is currently unavailable, and we will update this page when the paper is finally published.
-
-
 
 ### Requirement:
 torch==1.8.1
@@ -21,4 +18,11 @@ Then run the command:
 To switch the dataset, modify the "datasets" variable in line 1192 of train.py.
 
 
+### Citation
 
+@inproceedings{wang2022faith,
+  title={FAITH: Few-Shot Graph Classification with Hierarchical Task Graphs},
+  author={Wang, Song and Dong, Yushun and Huang, Xiao and Chen, Chen and Li, Jundong},
+  booktitle={IJCAI},
+  year={2022}
+}
