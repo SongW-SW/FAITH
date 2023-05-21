@@ -19,7 +19,7 @@ To switch the dataset, modify the "datasets" variable in line 1192 of train.py.
 
 
 ### Citation
-Thank you for your interest in our work! Welcome to cite it. <\br>
+Thank you for your interest in our work! Welcome to cite it. </br>
 
 @inproceedings{wang2022faith,  
   title={FAITH: Few-Shot Graph Classification with Hierarchical Task Graphs},  
