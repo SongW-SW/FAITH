@@ -92,7 +92,7 @@ class GCN(nn.Module):
     def normalize(self, A , symmetric=True):
         # A = A+I
         A = A + torch.eye(A.size(0))
-
+        # 所有节点的度
         d = A.sum(1)
         if symmetric:
             #D = D^-1/2
@@ -583,9 +583,6 @@ class Dataset:
 
         self.test_graphs=self.test_graphs[:self.args.K_shot+self.args.N_way*(self.args.query_size)*200]
 
-
-
-
         nx.Graph().number_of_nodes()
 
         self.test_tasks = defaultdict(list)
@@ -734,16 +731,6 @@ class Model(nn.Module):
         proto_input_embs=torch.matmul(agg_matrix,sample_emb_reshape).squeeze() #[(P+1)N, sample_out_emb_size]
 
 
-        #print('adj',final_adj)
-        #print('adj_norm',(final_adj-1e9*torch.less_equal(final_adj,0.8)).softmax(-1))
-        #print('sample_in',sample_embs)
-        #print('sample_out',sample_output_embs)
-        #
-        #print('agg out',sample_output_agg[:10])
-        #print('agg sum',sample_output_agg_reshape.sum())
-        #print('proto emb',proto_input_embs)
-
-
         return sample_output_embs_query,proto_input_embs
 
     def construct_proto_graph(self, proto_input_embs, support_classes):
@@ -763,11 +750,6 @@ class Model(nn.Module):
         agg_matrix=proto_output_agg.reshape(((self.P+1),1,self.N)).softmax(-1) #[(P+1), 1, N]
         proto_emb_reshape=proto_output_embs.reshape(((self.P+1),self.N,-1))  #[(P+1), N, proto_out_emb_size]
         task_input_embs=torch.matmul(agg_matrix,proto_emb_reshape).squeeze() #[(P+1), proto_out_emb_size]
-
-
-        #print('proto_adj',soft_adj)
-        #print('prot adj_norm',(final_adj-1e9*torch.less_equal(final_adj,0.8)).softmax(-1))
-        #print('proto_out_emb',proto_output_embs)
 
 
         return proto_output_embs, self.dropout(task_input_embs)
@@ -815,20 +797,9 @@ class Model(nn.Module):
                     temp.append(distance)
             result=-torch.cat(temp,0)
 
-            #temp=[]
-            #sample_emb_reshape=self.classify_linear(sample_emb_reshape)
-            #for i in range(self.P+1):
-            #    proto_emb=proto_emb_reshape_[i,:,:]   #N, emb_size
-            #    sample_emb=sample_emb_reshape[i,:,:,:].reshape([self.N*self.Q,-1])
-            #    temp.append(-EuclideanDistances(sample_emb,proto_emb))
-#
-            #result=torch.cat(temp,0)
+
 
             return result
-
-        #print('sample_classi_emb',sample_emb)
-        #print('proto_classi_emb',proto_emb)
-        #print('task_classi_emb',task_emb)
 
 
 
@@ -866,17 +837,15 @@ class Trainer:
         self.use_loss_based_prob=args.use_loss_based_prob
         self.loss_based_prob=torch.ones([100,self.dataset.train_classes_num]).cuda()*10
 
-        self.optimizer= optim.Adam(self.model.parameters(), lr=args.lr,
-                                   weight_decay=args.weight_decay)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
+        self.optimizer= optim.Adam(self.model.parameters(), lr=args.lr)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=args.weight_decay)
 
         self.criterion = nn.CrossEntropyLoss()
 
-        self.save_test_emb=[]
-        self.save_test_label=[]
 
     def train(self):
         best_test_acc=0
+        best_valid_acc=0
 
         train_accs=[]
         for i in range(self.epoch_num):
@@ -887,36 +856,44 @@ class Trainer:
             if loss==None:continue
 
             if i%50==0:
-                #self.scheduler.step()
+                self.scheduler.step()
                 print('Epoch {} Train Acc {:.4f} Loss {:.4f} Class Loss {:.4f}'.format(i,np.mean(train_accs),loss,class_loss))
+                f.write('Epoch {} Train Acc {:.4f} Loss {:.4f} Class Loss {:.4f}'.format(i,np.mean(train_accs),loss,class_loss)+'\n')
+
 
             if i%self.eval_interval==0:
                 with torch.no_grad():
                     test_accs=[]
                     start_test_idx=0
-
-
                     while start_test_idx<len(self.dataset.test_graphs)-self.K_shot*self.dataset.test_classes_num:
                         loss,test_acc,class_loss=self.train_one_step(mode='test',epoch=i,test_idx=start_test_idx)
                         if loss==None:continue
                         test_accs.extend(test_acc.tolist())
                         start_test_idx+=self.N_way*self.query_size
 
-
                     print('test task num',len(test_accs))
-
                     mean_acc=sum(test_accs)/len(test_accs)
                     if mean_acc>best_test_acc:
                         best_test_acc=mean_acc
 
-                        if self.args.save_test_emb:
-                            pkl.dump(torch.cat(self.save_test_emb,0).detach().cpu().numpy(),open('./test_emb_{}.pkl'.format(seed_value),'wb'))
-                            pkl.dump(torch.cat(self.save_test_label,0).detach().cpu().numpy(),open('./test_label_{}.pkl'.format(seed_value),'wb'))
-
-                    self.save_test_emb=[]
-                    self.save_test_label=[]
-
                     print('Mean Test Acc {:.4f}  Best Test Acc {:.4f}'.format(mean_acc,best_test_acc))
+                    f.write('Mean Test Acc {:.4f}  Best Test Acc {:.4f}'.format(mean_acc,best_test_acc)+'\n')
+
+                    test_accs=[]
+                    start_test_idx=0
+                    while start_test_idx<len(self.dataset.validation_graphs)-self.K_shot*self.dataset.train_classes_num:
+                        loss,test_acc,class_loss=self.train_one_step(mode='valid',epoch=i,test_idx=start_test_idx)
+                        if loss==None:continue
+                        test_accs.extend(test_acc.tolist())
+                        start_test_idx+=self.N_way*self.query_size
+
+                    print('test task num',len(test_accs))
+                    mean_acc=sum(test_accs)/len(test_accs)
+                    if mean_acc>best_valid_acc:
+                        best_valid_acc=mean_acc
+
+                    print('Mean Valid Acc {:.4f}  Best Valid Acc {:.4f}'.format(mean_acc,best_valid_acc))
+                    f.write('Mean Valid Acc {:.4f}  Best Valid Acc {:.4f}'.format(mean_acc,best_valid_acc)+'\n')
 
         return best_test_acc
 
@@ -947,6 +924,14 @@ class Trainer:
             first_N_class_sample = np.array(list(range(self.dataset.test_classes_num)))
             current_task = self.dataset.sample_one_task(self.dataset.test_tasks, first_N_class_sample, K_shot=self.K_shot,
                                                         query_size=self.query_size,test_start_idx=test_idx)
+        elif mode=='valid':
+            self.model.eval()
+            first_N_class_sample = np.array(list(range(self.dataset.test_classes_num)))
+            current_task = self.dataset.sample_one_task(self.dataset.test_tasks, first_N_class_sample, K_shot=self.K_shot,
+                                                        query_size=self.query_size,test_start_idx=test_idx)
+
+
+
 
 
         if self.baseline_mode=='proto' or self.baseline_mode=='relation':
@@ -1023,27 +1008,13 @@ class Trainer:
 
         sim_matrix=classifiy_result.softmax(-1)
 
-
-
-
         sample_rate=sim_matrix.sum(0).softmax(-1).cpu().detach().numpy()
-
 
 
         exclude_self=False
         if exclude_self and mode=='train':
             sample_rate[first_N_class_sample]=0
 
-
-
-        if np.isnan(sample_rate).sum()>0:
-            print(sample_rate)
-            return None, None, None
-
-
-        M_candidate_class = []
-        # --output M nearest classes
-        # --maybe should filter out self classes
 
         P_tasks, support_classes = self.dataset.sample_P_tasks(self.dataset.train_tasks, self.P_num, (sample_rate/sample_rate.sum()),
                                                                N_way=self.N_way, K_shot=self.K_shot,
@@ -1055,8 +1026,6 @@ class Trainer:
             P_tasks, support_classes = self.dataset.sample_P_tasks(self.dataset.test_tasks, self.P_num, np.ones([self.dataset.test_classes_num]) / self.dataset.test_classes_num,
                                                                    N_way=self.N_way, K_shot=self.K_shot,
                                                                    query_size=self.query_size)
-
-
 
 
 
@@ -1099,15 +1068,6 @@ class Trainer:
             label=torch.cat(labels,-1).cuda()
             scores=scores.reshape([self.P_num+1,self.N_way,self.query_size,self.N_way])[0,:,:,:].reshape(self.N_way*self.query_size,self.N_way)
 
-            if np.random.random()<0.05:
-                print(scores[:5,:])
-
-
-            if self.args.save_test_emb:
-                sample_emb=sample_output_embs_query.reshape([self.P_num+1,self.N_way,self.query_size,self.model.sample_out_emb_size])[0,:,:,:].reshape(self.N_way*self.query_size,self.model.sample_out_emb_size)
-                self.save_test_emb.append(sample_emb)
-                self.save_test_label.append(label)
-
 
         y_preds=torch.argmax(scores,dim=1)
 
@@ -1116,25 +1076,9 @@ class Trainer:
             y_preds=y_preds[:label.shape[0]-current_task['append_count']]
             label=label[:label.shape[0]-current_task['append_count']]
 
-
         acc=(y_preds==label).float().cpu().numpy()
-
-
-
-
-
-
         loss=self.criterion(scores,label)+class_loss.mean()*0.001
 
-        if torch.isnan(loss):
-            print('sample rate',sample_rate)
-            print(sample_input_embs)
-            print(sample_output_embs_query)
-            print(proto_output_embs)
-            print(task_output_embs)
-            print('score',scores)
-            print(1/0)
-        #print(loss,class_loss.mean())
 
         if mode=='train':
 
@@ -1155,11 +1099,11 @@ def parse_arguments():
                         help='baseline')
 
     parser.add_argument('--N_way', type=int, default=3)
-    parser.add_argument('--K_shot', type=int, default=10)
-    parser.add_argument('--query_size', type=int, default=5)
+    parser.add_argument('--K_shot', type=int, default=5)
+    parser.add_argument('--query_size', type=int, default=10)
     parser.add_argument('--P_num', type=int, default=10)
 
-    parser.add_argument('--test_task_num', type=int, default=5)
+    parser.add_argument('--test_task_num', type=int, default=10)
 
     parser.add_argument('--dropout', type=float, default=0.5)
 
@@ -1168,57 +1112,56 @@ def parse_arguments():
 
 
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--weight_decay', type=float, default=1e-7)
+    parser.add_argument('--weight_decay', type=float, default=0.2)
+    #parser.add_argument('--weight_decay', type=float, default=0)
     #parser.add_argument('--weight_decay', type=float, default=0)
 
     parser.add_argument('--eval_interval', type=int, default=25)
-    parser.add_argument('--epoch_num', type=int, default=5000)
+    parser.add_argument('--epoch_num', type=int, default=5000*5)
 
     parser.add_argument('--use_select_sim',type=bool,default=False)
     parser.add_argument('--use_loss_based_prob',type=bool,default=True)
 
-    parser.add_argument('--save_test_emb',type=bool,default=False)
+    parser.add_argument('--save_test_emb',type=bool,default=True)
 
     args = parser.parse_args()
     return args
 
 args = parse_arguments()
 
+seed_value_start=31
 
 
-seed_value_start=32
-
-#['Letter_high','ENZYMES','TRIANGLES','Reddit']:
-datasets=['Letter_high']
+datasets=['TRIANGLES']
 result={dataset:defaultdict(list) for dataset in datasets}
 for dataset in datasets:
 
-    for k in [5]:
+    for k in [5]: #10
         args.K_shot=k
 
+        for repeat in range(41,42):
+            seed_value=seed_value_start+repeat
+            import os
+            os.environ['PYTHONHASHSEED']=str(seed_value)
+            import random
+            random.seed(seed_value)
+            np.random.seed(seed_value)
+            torch.manual_seed(seed_value)
+            torch.cuda.manual_seed(seed_value)
 
-        seed_value=seed_value_start
-        import os
-        os.environ['PYTHONHASHSEED']=str(seed_value)
-        import random
-        random.seed(seed_value)
-        np.random.seed(seed_value)
-        torch.manual_seed(seed_value)
-        torch.cuda.manual_seed(seed_value)
+            text_file_name='./our_results/{}-{}-shot.txt'.format(dataset, k)
+            f=open(text_file_name, 'w')
+            file_name='./our_results/save_test'
 
+            print(file_name)
+            args.dataset_name=dataset
+            trainer=Trainer(args)
 
+            test_acc=trainer.train()
+            result[dataset][k].append(test_acc)
 
-        file_name='./Letter_high.json'
+            del trainer
+            del test_acc
 
-        print(file_name)
-        args.dataset_name=dataset
-        trainer=Trainer(args)
-
-        test_acc=trainer.train()
-        result[dataset][k].append(test_acc)
-
-        del trainer
-        del test_acc
-
-        json.dump(result,open(file_name,'w'))
+            json.dump(result,open(file_name,'w'))
 
